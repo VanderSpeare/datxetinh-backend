@@ -118,7 +118,16 @@ app.get('/api/auth/verify', async (req, res) => {
     res.status(401).json({ success: false, message: 'Invalid or expired token' });
   }
 });
+app.post('/refresh-token', (req, res) => {
+  const refreshToken = req.body.refreshToken;
+  if (!refreshToken) return res.sendStatus(401);
 
+  jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET, (err, user) => {
+    if (err) return res.sendStatus(403);
+    const newAccessToken = jwt.sign({ id: user.id }, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '15m' });
+    res.json({ accessToken: newAccessToken });
+  });
+});
 // Trip Search Endpoint
 app.post('/api/trips/search', async (req, res) => {
   try {
