@@ -4,6 +4,8 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const Joi = require('joi');
+const WebSocket = require('ws');
+require('dotenv').config();
 
 const app = express();
 app.use(express.json());
@@ -107,6 +109,7 @@ const bookingSchemaValidator = Joi.object({
 
 // Environment Variables
 const JWT_SECRET = process.env.JWT_SECRET || 'my_very_secure_secret_2025';
+const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb+srv://vanderspeare:009.00@cluster0.3ido8bh.mongodb.net/busData?retryWrites=true&w=majority';
 
 // Middleware to verify token
@@ -133,7 +136,7 @@ const verifyToken = async (req, res, next) => {
 };
 
 // Register Endpoint
-app.post('/auth/register', async (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
   try {
     const { error } = registerSchema.validate(req.body);
     if (error) {
@@ -170,7 +173,7 @@ app.post('/auth/register', async (req, res) => {
 });
 
 // Login Endpoint
-app.post('/auth/login', async (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   try {
     const { error } = loginSchema.validate(req.body);
     if (error) {
@@ -203,7 +206,7 @@ app.post('/auth/login', async (req, res) => {
 });
 
 // Refresh Token Endpoint
-app.post('/auth/refresh', async (req, res) => {
+app.post('/api/auth/refresh', async (req, res) => {
   try {
     const { refreshToken } = req.body;
     if (!refreshToken) {
@@ -234,7 +237,7 @@ app.post('/auth/refresh', async (req, res) => {
 });
 
 // Token Verification Endpoint
-app.get('/auth/verify', verifyToken, async (req, res) => {
+app.get('/api/auth/verify', verifyToken, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
     logger.info(`Token verified for userId: ${req.userId}`);
@@ -246,7 +249,7 @@ app.get('/auth/verify', verifyToken, async (req, res) => {
 });
 
 // Trip Search Endpoint (POST)
-app.post('/trips/search', async (req, res) => {
+app.post('/api/trips/search', async (req, res) => {
   try {
     const { error } = searchTripSchema.validate(req.body);
     if (error) {
@@ -359,7 +362,7 @@ app.post('/trips/search', async (req, res) => {
 });
 
 // Trip Search Endpoint (GET)
-app.get('/trips/search', async (req, res) => {
+app.get('/api/trips/search', async (req, res) => {
   try {
     const { error } = searchTripSchema.validate(req.query);
     if (error) {
@@ -472,7 +475,7 @@ app.get('/trips/search', async (req, res) => {
 });
 
 // Get Trip by ID
-app.get('/trips/:id', async (req, res) => {
+app.get('/api/trips/:id', async (req, res) => {
   try {
     const trip = await Trip.findById(req.params.id).lean();
     if (!trip) {
@@ -509,7 +512,7 @@ app.get('/trips/:id', async (req, res) => {
 });
 
 // Get All Trips
-app.get('/trips', async (req, res) => {
+app.get('/api/trips', async (req, res) => {
   try {
     const trips = await Trip.find().lean();
     res.json(trips.map(trip => ({
@@ -542,7 +545,7 @@ app.get('/trips', async (req, res) => {
 });
 
 // Book Trip
-app.post('/bookings', verifyToken, async (req, res) => {
+app.post('/api/bookings', verifyToken, async (req, res) => {
   try {
     const { error } = bookingSchemaValidator.validate(req.body);
     if (error) {
@@ -577,7 +580,7 @@ app.post('/bookings', verifyToken, async (req, res) => {
 });
 
 // Get User Bookings
-app.get('/bookings/user/:userId', verifyToken, async (req, res) => {
+app.get('/api/bookings/user/:userId', verifyToken, async (req, res) => {
   try {
     if (req.params.userId !== req.userId) {
       logger.warning(`Unauthorized booking access by userId: ${req.userId}`);
@@ -611,7 +614,7 @@ app.get('/bookings/user/:userId', verifyToken, async (req, res) => {
 });
 
 // Cancel Booking
-app.delete('/bookings/:id', verifyToken, async (req, res) => {
+app.delete('/api/bookings/:id', verifyToken, async (req, res) => {
   try {
     const booking = await Booking.findById(req.params.id);
     if (!booking || booking.userId.toString() !== req.userId) {
@@ -633,7 +636,7 @@ app.delete('/bookings/:id', verifyToken, async (req, res) => {
 });
 
 // Get User Profile
-app.get('/users/:id', verifyToken, async (req, res) => {
+app.get('/api/users/:id', verifyToken, async (req, res) => {
   try {
     if (req.params.id !== req.userId) {
       logger.warning(`Unauthorized profile access by userId: ${req.userId}`);
@@ -652,7 +655,7 @@ app.get('/users/:id', verifyToken, async (req, res) => {
 });
 
 // Update User Profile
-app.put('/users/:id', verifyToken, async (req, res) => {
+app.put('/api/users/:id', verifyToken, async (req, res) => {
   try {
     if (req.params.id !== req.userId) {
       logger.warning(`Unauthorized profile update by userId: ${req.userId}`);
@@ -677,7 +680,7 @@ app.put('/users/:id', verifyToken, async (req, res) => {
 });
 
 // Get Locations
-app.get('/locations', async (req, res) => {
+app.get('/api/locations', async (req, res) => {
   try {
     const locations = await Trip.distinct('startingPoint').lean();
     const destinationLocations = await Trip.distinct('destination').lean();
@@ -690,9 +693,95 @@ app.get('/locations', async (req, res) => {
 });
 
 // Health Check Endpoint
-app.get('/health', (req, res) => {
+app.get('/api/health', (req, res) => {
   logger.info('Health check endpoint called');
   res.json({ status: 'healthy' });
+});
+
+// WebSocket Server
+const server = app.listen(PORT, () => {
+  logger.info(`Server running on port ${PORT}`);
+});
+
+const wss = new WebSocket.Server({ server });
+
+wss.on('connection', (ws) => {
+  logger.info('WebSocket connection established');
+  ws.on('message', async (data) => {
+    try {
+      let requestData;
+      try {
+        requestData = JSON.parse(data);
+      } catch (err) {
+        logger.warning('Invalid JSON received, using default query');
+        requestData = {
+          destination: 'Vũng Tàu',
+          maxResults: 5,
+        };
+      }
+
+      const { destination, maxResults = 5 } = requestData;
+
+      // Validate required field
+      if (!destination) {
+        logger.warning('Destination is required in WebSocket request');
+        ws.send(JSON.stringify({ error: 'Vui lòng cung cấp địa điểm đến (destination).' }));
+        return;
+      }
+
+      // Use current date as the default search date
+      const currentDate = new Date();
+      const formattedDate = currentDate.toLocaleDateString('en-GB', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+      }).replace(/ /g, '-'); // Format: DD-MMM-YYYY, e.g., "21-May-2025"
+
+      // Build MongoDB query with only destination and current date
+      const query = { $and: [] };
+      query.$and.push({ destination: new RegExp(destination, 'i') });
+      query.$and.push({ departureDate: formattedDate });
+
+      const trips = await Trip.find(query)
+        .sort({ rankScore: -1, price: 1 })
+        .limit(parseInt(maxResults))
+        .lean();
+
+      const tripList = trips.map(trip => ({
+        id: trip._id.toString(),
+        source: trip.startingPoint || 'N/A',
+        destination: trip.destination || 'N/A',
+        source_station_id: trip.sourceStationId || '',
+        destination_station_id: trip.destinationStationId || '',
+        source_station: trip.sourceStation?.name || trip.startingPoint || 'N/A',
+        destination_station: trip.destinationStation?.name || trip.destination || 'N/A',
+        source_station_address: trip.sourceStation?.address || '',
+        destination_station_address: trip.destinationStation?.address || '',
+        departure_time: trip.departureTime || 'N/A',
+        departure_date: trip.departureDate || 'N/A',
+        price: Number(trip.price || 0),
+        duration: Number(trip.duration || 0),
+        bus_type: trip.busType || 'Standard',
+        operator: trip.operator || 'N/A',
+        operator_type: trip.operatorType || 'Small',
+        amenities: trip.amenities || [],
+        rating: Number(trip.rating || 0),
+        rank_score: Number(trip.rankScore || trip.rating || 0),
+        available_seats: Number(trip.availableSeats || 30),
+        recommendation: trip.recommendation || 'Cập nhật qua WebSocket',
+      }));
+
+      logger.info(`WebSocket sending ${tripList.length} trips for destination: ${destination}`);
+      ws.send(JSON.stringify({ success: true, trips: tripList }));
+    } catch (error) {
+      logger.error(`WebSocket error: ${error}`);
+      ws.send(JSON.stringify({ success: false, error: `Lỗi WebSocket: ${error.message}` }));
+    }
+  });
+
+  ws.on('close', () => {
+    logger.info('WebSocket connection closed');
+  });
 });
 
 // MongoDB Connection
@@ -704,6 +793,3 @@ mongoose.connect(MONGO_URI, {
     logger.info('Kết nối thành công đến MongoDB');
   })
   .catch(err => logger.error(`Lỗi kết nối MongoDB: ${err}`));
-
-// Export the Express app for Vercel
-module.exports = app;
