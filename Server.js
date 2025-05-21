@@ -257,7 +257,7 @@ app.post('/api/trips/search', async (req, res) => {
       return res.status(400).json({ success: false, message: error.details[0].message });
     }
 
-    const { destination, maxResults } = req.body;
+    const { source, destination, date, maxResults } = req.body;
 
     // Validate required field
     if (!destination) {
@@ -265,24 +265,21 @@ app.post('/api/trips/search', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Vui lòng cung cấp địa điểm đến (destination).' });
     }
 
-    // Use current date as the default search date
-    const currentDate = new Date();
-    const formattedDate = currentDate.toLocaleDateString('en-GB', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-    }).replace(/ /g, '-'); // Format: DD-MMM-YYYY, e.g., "21-May-2025"
-
-    // Build MongoDB query with only destination and current date
+    // Build MongoDB query with raw input values
     let query = { $and: [] };
+    if (source) {
+      query.$and.push({ startingPoint: new RegExp(source, 'i') });
+    }
     query.$and.push({ destination: new RegExp(destination, 'i') });
-    query.$and.push({ departureDate: formattedDate });
+    if (date) {
+      query.$and.push({ departureDate: date });
+    }
 
     logger.info(`MongoDB query: ${JSON.stringify(query)}`);
 
     let trips = await Trip.find(query)
       .sort({ rankScore: -1, price: 1 })
-      .limit(maxResults)
+      .limit(parseInt(maxResults) || 5)
       .lean();
 
     let recommendations = trips.map(trip => ({
@@ -314,12 +311,15 @@ app.post('/api/trips/search', async (req, res) => {
     // Fallback query if no results (only destination)
     if (!recommendations.length) {
       let fallbackQuery = { $and: [] };
+      if (source) {
+        fallbackQuery.$and.push({ startingPoint: new RegExp(source, 'i') });
+      }
       fallbackQuery.$and.push({ destination: new RegExp(destination, 'i') });
 
       logger.info(`Fallback query: ${JSON.stringify(fallbackQuery)}`);
       trips = await Trip.find(fallbackQuery)
         .sort({ rankScore: -1, price: 1 })
-        .limit(maxResults)
+        .limit(parseInt(maxResults) || 5)
         .lean();
 
       recommendations = trips.map(trip => ({
@@ -350,7 +350,10 @@ app.post('/api/trips/search', async (req, res) => {
 
     if (!recommendations.length) {
       logger.warning(`No trips found for request: ${JSON.stringify(req.body)}`);
-      return res.status(404).json({ success: false, message: 'Không tìm thấy chuyến đi phù hợp.' });
+      return res.status(404).json({
+        success: false,
+        message: `Không tìm thấy chuyến đi phù hợp cho điểm đi: ${source || 'bất kỳ'}, điểm đến: ${destination}, ngày: ${date || 'bất kỳ'}.`,
+      });
     }
 
     logger.info(`Returning ${recommendations.length} trip recommendations`);
@@ -370,7 +373,7 @@ app.get('/api/trips/search', async (req, res) => {
       return res.status(400).json({ success: false, message: error.details[0].message });
     }
 
-    const { destination, maxResults } = req.query;
+    const { source, destination, date, maxResults } = req.query;
 
     // Validate required field
     if (!destination) {
@@ -378,18 +381,15 @@ app.get('/api/trips/search', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Vui lòng cung cấp địa điểm đến (destination).' });
     }
 
-    // Use current date as the default search date
-    const currentDate = new Date();
-    const formattedDate = currentDate.toLocaleDateString('en-GB', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-    }).replace(/ /g, '-'); // Format: DD-MMM-YYYY, e.g., "21-May-2025"
-
-    // Build MongoDB query with only destination and current date
+    // Build MongoDB query with raw input values
     let query = { $and: [] };
+    if (source) {
+      query.$and.push({ startingPoint: new RegExp(source, 'i') });
+    }
     query.$and.push({ destination: new RegExp(destination, 'i') });
-    query.$and.push({ departureDate: formattedDate });
+    if (date) {
+      query.$and.push({ departureDate: date });
+    }
 
     logger.info(`MongoDB query (GET): ${JSON.stringify(query)}`);
 
@@ -427,6 +427,9 @@ app.get('/api/trips/search', async (req, res) => {
     // Fallback query if no results (only destination)
     if (!recommendations.length) {
       let fallbackQuery = { $and: [] };
+      if (source) {
+        fallbackQuery.$and.push({ startingPoint: new RegExp(source, 'i') });
+      }
       fallbackQuery.$and.push({ destination: new RegExp(destination, 'i') });
 
       logger.info(`Fallback query (GET): ${JSON.stringify(fallbackQuery)}`);
@@ -463,7 +466,10 @@ app.get('/api/trips/search', async (req, res) => {
 
     if (!recommendations.length) {
       logger.warning(`No trips found for request (GET): ${JSON.stringify(req.query)}`);
-      return res.status(404).json({ success: false, message: 'Không tìm thấy chuyến đi phù hợp.' });
+      return res.status(404).json({
+        success: false,
+        message: `Không tìm thấy chuyến đi phù hợp cho điểm đi: ${source || 'bất kỳ'}, điểm đến: ${destination}, ngày: ${date || 'bất kỳ'}.`,
+      });
     }
 
     logger.info(`Returning ${recommendations.length} trip recommendations (GET)`);
@@ -720,7 +726,7 @@ wss.on('connection', (ws) => {
         };
       }
 
-      const { destination, maxResults = 5 } = requestData;
+      const { source, destination, date, maxResults = 5 } = requestData;
 
       // Validate required field
       if (!destination) {
@@ -729,18 +735,17 @@ wss.on('connection', (ws) => {
         return;
       }
 
-      // Use current date as the default search date
-      const currentDate = new Date();
-      const formattedDate = currentDate.toLocaleDateString('en-GB', {
-        day: '2-digit',
-        month: 'short',
-        year: 'numeric',
-      }).replace(/ /g, '-'); // Format: DD-MMM-YYYY, e.g., "21-May-2025"
-
-      // Build MongoDB query with only destination and current date
+      // Build MongoDB query with raw input values
       const query = { $and: [] };
+      if (source) {
+        query.$and.push({ startingPoint: new RegExp(source, 'i') });
+      }
       query.$and.push({ destination: new RegExp(destination, 'i') });
-      query.$and.push({ departureDate: formattedDate });
+      if (date) {
+        query.$and.push({ departureDate: date });
+      }
+
+      logger.info(`WebSocket MongoDB query: ${JSON.stringify(query)}`);
 
       const trips = await Trip.find(query)
         .sort({ rankScore: -1, price: 1 })
@@ -772,6 +777,15 @@ wss.on('connection', (ws) => {
       }));
 
       logger.info(`WebSocket sending ${tripList.length} trips for destination: ${destination}`);
+
+      if (!tripList.length) {
+        ws.send(JSON.stringify({
+          success: false,
+          error: `Không tìm thấy chuyến đi phù hợp cho điểm đi: ${source || 'bất kỳ'}, điểm đến: ${destination}, ngày: ${date || 'bất kỳ'}.`,
+        }));
+        return;
+      }
+
       ws.send(JSON.stringify({ success: true, trips: tripList }));
     } catch (error) {
       logger.error(`WebSocket error: ${error}`);
