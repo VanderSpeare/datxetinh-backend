@@ -67,7 +67,7 @@ const tripSchema = new mongoose.Schema({
   sourceStationId: String,
   destinationStationId: String,
 });
-const Trip = mongoose.model('Trip', tripSchema);
+const Trip = mongoose.model('Trip', tripSchema, 'buses');
 
 // Booking Schema
 const bookingSchema = new mongoose.Schema({
