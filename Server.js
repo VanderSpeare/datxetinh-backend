@@ -722,11 +722,11 @@ wss.on('connection', (ws) => {
         logger.warning('Invalid JSON received, using default query');
         requestData = {
           destination: 'Vũng Tàu',
-          maxResults: 5,
+          maxResults: 15,
         };
       }
 
-      const { source, destination, date, maxResults = 5 } = requestData;
+      const { source, destination, date, maxResults = 15 } = requestData;
 
       // Validate required field
       if (!destination) {
