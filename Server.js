@@ -69,15 +69,15 @@ const tripSchema = new mongoose.Schema({
 });
 const Trip = mongoose.model('Trip', tripSchema, 'buses');
 
-// Booking Schema
 const bookingSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   tripId: { type: mongoose.Schema.Types.ObjectId, ref: 'Trip', required: true },
   seats: [Number],
   createdAt: { type: Date, default: Date.now },
+  paymentStatus: { type: String, default: 'pending', enum: ['pending', 'paid', 'failed'] },
+  paymentTransactionNo: { type: String },
 });
 const Booking = mongoose.model('Booking', bookingSchema);
-
 // Validation Schemas
 const registerSchema = Joi.object({
   email: Joi.string().email().required(),
@@ -800,3 +800,171 @@ mongoose.connect(MONGO_URI, {
     logger.info('Kết nối thành công đến MongoDB');
   })
   .catch(err => logger.error(`Lỗi kết nối MongoDB: ${err}`));
+
+const crypto = require('crypto');
+const querystring = require('querystring');
+
+// Validation Schema cho yêu cầu thanh toán
+const createPaymentSchema = Joi.object({
+  bookingId: Joi.string().required(),
+  amount: Joi.number().min(10000).required(), // Tối thiểu 10,000 VND
+  userId: Joi.string().required(),
+});
+
+// Endpoint tạo URL thanh toán VNPAY
+app.post('/api/vnpay/create-payment', verifyToken, async (req, res) => {
+  try {
+    const { error } = createPaymentSchema.validate(req.body);
+    if (error) {
+      logger.warning(`Validation error in create payment: ${error.details[0].message}`);
+      return res.status(400).json({ success: false, message: error.details[0].message });
+    }
+
+    const { bookingId, amount, userId } = req.body;
+
+    // Kiểm tra quyền truy cập
+    if (userId !== req.userId) {
+      logger.warning(`Unauthorized payment attempt by userId: ${req.userId}`);
+      return res.status(403).json({ success: false, message: 'Không được phép' });
+    }
+
+    // Kiểm tra booking
+    const booking = await Booking.findById(bookingId).populate('tripId');
+    if (!booking || booking.userId.toString() !== userId) {
+      logger.warning(`Invalid or unauthorized booking: ${bookingId}`);
+      return res.status(400).json({ success: false, message: 'Đặt chỗ không hợp lệ' });
+    }
+
+    // Chuẩn bị tham số thanh toán
+    const date = new Date();
+    const createDate = date.toISOString().replace(/[-:T.]/g, '').slice(0, 14); // YYYYMMDDHHMMSS
+    const orderId = `${bookingId}_${Date.now()}`; // Mã đơn hàng duy nhất
+    const ipAddr = req.ip || '127.0.0.1';
+
+    const params = {
+      vnp_Version: '2.1.0',
+      vnp_Command: 'pay',
+      vnp_TmnCode: VNPAY_TMN_CODE,
+      vnp_Amount: amount * 100, // VNPAY yêu cầu số tiền * 100 (VD: 300,000 VND = 30000000)
+      vnp_CurrCode: 'VND',
+      vnp_TxnRef: orderId,
+      vnp_OrderInfo: `Thanh toan dat ve ${bookingId}`,
+      vnp_OrderType: '250000', // Mã ngành hàng (vận tải)
+      vnp_Locale: 'vn',
+      vnp_CreateDate: createDate,
+      vnp_IpAddr: ipAddr,
+      vnp_ReturnUrl: 'https://your-frontend.com/payment-result', // URL frontend xử lý kết quả
+    };
+
+    // Sắp xếp tham số theo thứ tự alphabet
+    const sortedParams = Object.keys(params)
+      .sort()
+      .reduce((obj, key) => {
+        obj[key] = params[key];
+        return obj;
+      }, {});
+
+    // Tạo chuỗi ký tự để checksum
+    const signData = querystring.stringify(sortedParams, { encode: false });
+    const vnp_SecureHash = crypto
+      .createHmac('sha512', VNPAY_HASH_SECRET)
+      .update(signData)
+      .digest('hex')
+      .toUpperCase();
+
+    // Thêm secure hash vào tham số
+    sortedParams.vnp_SecureHash = vnp_SecureHash;
+
+    // Tạo URL thanh toán
+    const vnpUrl = `${VNPAY_URL}?${querystring.stringify(sortedParams)}`;
+
+    logger.info(`Created VNPAY payment URL for booking: ${bookingId}`);
+
+    res.json({ success: true, paymentUrl: vnpUrl, orderId });
+  } catch (error) {
+    logger.error(`Create VNPAY payment error: ${error.message}`);
+    res.status(500).json({ success: false, message: `Lỗi server: ${error.message}` });
+  }
+});
+
+// Validation Schema cho IPN
+const ipnSchema = Joi.object({
+  vnp_TxnRef: Joi.string().required(),
+  vnp_Amount: Joi.number().required(),
+  vnp_ResponseCode: Joi.string().required(),
+  vnp_TransactionNo: Joi.string().allow('', null),
+  vnp_SecureHash: Joi.string().required(),
+});
+
+// Endpoint IPN
+app.post('/api/vnpay/ipn', async (req, res) => {
+  try {
+    const { error } = ipnSchema.validate(req.body);
+    if (error) {
+      logger.warning(`Validation error in IPN: ${error.details[0].message}`);
+      return res.status(400).json({ RspCode: '97', Message: 'Invalid request' });
+    }
+
+    const {
+      vnp_TxnRef,
+      vnp_Amount,
+      vnp_ResponseCode,
+      vnp_TransactionNo,
+      vnp_SecureHash,
+      ...otherParams
+    } = req.body;
+
+    // Kiểm tra checksum
+    const sortedParams = Object.keys(otherParams)
+      .sort()
+      .reduce((obj, key) => {
+        obj[key] = otherParams[key];
+        return obj;
+      }, {});
+    const signData = querystring.stringify(sortedParams, { encode: false });
+    const calculatedHash = crypto
+      .createHmac('sha512', VNPAY_HASH_SECRET)
+      .update(signData)
+      .digest('hex')
+      .toUpperCase();
+
+    if (calculatedHash !== vnp_SecureHash) {
+      logger.warning(`Invalid checksum for IPN: ${vnp_TxnRef}`);
+      return res.status(200).json({ RspCode: '97', Message: 'Invalid checksum' });
+    }
+
+    // Lấy bookingId từ vnp_TxnRef (loại bỏ phần timestamp)
+    const bookingId = vnp_TxnRef.split('_')[0];
+    const booking = await Booking.findById(bookingId);
+
+    if (!booking) {
+      logger.warning(`Booking not found for IPN: ${vnp_TxnRef}`);
+      return res.status(200).json({ RspCode: '01', Message: 'Order not found' });
+    }
+
+    // Kiểm tra số tiền
+    const expectedAmount = booking.tripId.price * booking.seats.length * 100; // Giá * số ghế * 100
+    if (Number(vnp_Amount) !== expectedAmount) {
+      logger.warning(`Invalid amount for IPN: ${vnp_TxnRef}, expected: ${expectedAmount}, received: ${vnp_Amount}`);
+      return res.status(200).json({ RspCode: '04', Message: 'Invalid amount' });
+    }
+
+    // Cập nhật trạng thái thanh toán
+    if (vnp_ResponseCode === '00') {
+      booking.paymentStatus = 'paid';
+      booking.paymentTransactionNo = vnp_TransactionNo;
+      await booking.save();
+      logger.info(`Payment successful for booking: ${bookingId}, transaction: ${vnp_TransactionNo}`);
+      return res.status(200).json({ RspCode: '00', Message: 'Success' });
+    } else {
+      booking.paymentStatus = 'failed';
+      await booking.save();
+      logger.warning(`Payment failed for booking: ${bookingId}, response code: ${vnp_ResponseCode}`);
+      return res.status(200).json({ RspCode: vnp_ResponseCode, Message: 'Transaction failed' });
+    }
+  } catch (error) {
+    logger.error(`IPN error: ${error.message}`);
+    return res.status(200).json({ RspCode: '99', Message: 'Unknown error' });
+  }
+});
+
