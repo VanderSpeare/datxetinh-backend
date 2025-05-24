@@ -257,7 +257,7 @@ app.post('/api/trips/search', async (req, res) => {
       return res.status(400).json({ success: false, message: error.details[0].message });
     }
 
-    const { source, destination, date, maxResults } = req.body;
+    const { source, destination, maxResults } = req.body;
 
     // Validate required field
     if (!destination) {
@@ -271,9 +271,6 @@ app.post('/api/trips/search', async (req, res) => {
       query.$and.push({ startingPoint: new RegExp(source, 'i') });
     }
     query.$and.push({ destination: new RegExp(destination, 'i') });
-    if (date) {
-      query.$and.push({ departureDate: date });
-    }
 
     logger.info(`MongoDB query: ${JSON.stringify(query)}`);
 
@@ -352,7 +349,7 @@ app.post('/api/trips/search', async (req, res) => {
       logger.warning(`No trips found for request: ${JSON.stringify(req.body)}`);
       return res.status(404).json({
         success: false,
-        message: `Không tìm thấy chuyến đi phù hợp cho điểm đi: ${source || 'bất kỳ'}, điểm đến: ${destination}, ngày: ${date || 'bất kỳ'}.`,
+        message: `Không tìm thấy chuyến đi phù hợp cho điểm đi: ${source || 'bất kỳ'}, điểm đến: ${destination}.`,
       });
     }
 
@@ -363,7 +360,6 @@ app.post('/api/trips/search', async (req, res) => {
     res.status(500).json({ success: false, message: `Lỗi server: ${error.message}` });
   }
 });
-
 // Trip Search Endpoint (GET)
 app.get('/api/trips/search', async (req, res) => {
   try {
@@ -373,7 +369,7 @@ app.get('/api/trips/search', async (req, res) => {
       return res.status(400).json({ success: false, message: error.details[0].message });
     }
 
-    const { source, destination, date, maxResults } = req.query;
+    const { source, destination, maxResults } = req.query;
 
     // Validate required field
     if (!destination) {
@@ -387,9 +383,6 @@ app.get('/api/trips/search', async (req, res) => {
       query.$and.push({ startingPoint: new RegExp(source, 'i') });
     }
     query.$and.push({ destination: new RegExp(destination, 'i') });
-    if (date) {
-      query.$and.push({ departureDate: date });
-    }
 
     logger.info(`MongoDB query (GET): ${JSON.stringify(query)}`);
 
@@ -468,7 +461,7 @@ app.get('/api/trips/search', async (req, res) => {
       logger.warning(`No trips found for request (GET): ${JSON.stringify(req.query)}`);
       return res.status(404).json({
         success: false,
-        message: `Không tìm thấy chuyến đi phù hợp cho điểm đi: ${source || 'bất kỳ'}, điểm đến: ${destination}, ngày: ${date || 'bất kỳ'}.`,
+        message: `Không tìm thấy chuyến đi phù hợp cho điểm đi: ${source || 'bất kỳ'}, điểm đến: ${destination}.`,
       });
     }
 
@@ -722,11 +715,11 @@ wss.on('connection', (ws) => {
         logger.warning('Invalid JSON received, using default query');
         requestData = {
           destination: 'Vũng Tàu',
-          maxResults: 15,
+          maxResults: 5,
         };
       }
 
-      const { source, destination, date, maxResults = 15 } = requestData;
+      const { source, destination, date, maxResults = 5 } = requestData;
 
       // Validate required field
       if (!destination) {
